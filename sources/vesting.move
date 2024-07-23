@@ -194,8 +194,15 @@ module vesting::vesting {
 
     // User functions
 
+    public entry fun claim_script(account: &signer, creator: address) acquires VestingStore {
+        let tokens = claim(account, creator);
+
+        // deposit to the account
+        primary_fungible_store::deposit(signer::address_of(account), tokens);
+    }
+
     /// Claims the vested tokens.
-    public entry fun claim(account: &signer, creator: address): FungibleAsset acquires VestingStore {
+    public fun claim(account: &signer, creator: address): FungibleAsset acquires VestingStore {
         let account_addr = signer::address_of(account);
         let store = borrow_global_mut<VestingStore>(creator);
 
