@@ -210,13 +210,13 @@ module vesting::vesting {
         );
         let vesting = table::borrow_mut(&mut store.vestings, account_addr);
         let (_, cur_time) = block::get_block_info();
+        let cliff_time = vesting.start_time + vesting.cliff_period;
 
         // check if the vesting is still in the cliff period
-        if (cur_time < vesting.cliff_period) {
+        if (cur_time < cliff_time) {
             return fungible_asset::zero(store.token_metadata)
         };
 
-        let cliff_time = vesting.start_time + vesting.cliff_period;
         let elapsed_claim_frequencies = (cur_time - cliff_time) / vesting.claim_frequency;
         let elapsed_period = vesting.cliff_period + elapsed_claim_frequencies * vesting.claim_frequency;
         let claimable_amount = (
