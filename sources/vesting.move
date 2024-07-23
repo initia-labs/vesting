@@ -195,7 +195,7 @@ module vesting::vesting {
     // User functions
 
     /// Claims the vested tokens.
-    public fun claim(account: &signer, creator: address): FungibleAsset acquires VestingStore {
+    public entry fun claim(account: &signer, creator: address): FungibleAsset acquires VestingStore {
         let account_addr = signer::address_of(account);
         let store = borrow_global_mut<VestingStore>(creator);
 
