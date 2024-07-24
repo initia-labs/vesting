@@ -364,9 +364,8 @@ module vesting::vesting {
 
     // Internal functions
 
-    fun calc_affected_freeze_period(cur_time: u64, cliff_time: u64, freezes: &vector<FreezePeriod>): (u64, u64) {
-        let freeze_period_before_cliff = 0;
-        let freeze_period_after_cliff = 0;
+    fun calc_affected_freeze_period(cur_time: u64, freezes: &vector<FreezePeriod>): u64 {
+        let freeze_period = 0;
 
         let i = 0;
         while (i < vector::length(freezes)) {
@@ -383,27 +382,12 @@ module vesting::vesting {
             } else {
                 cur_time - freeze.start_time
             };
-
-            if (cliff_time >= freeze_end_time) {
-                freeze_period_before_cliff = freeze_period_before_cliff + affected_period;
-            } else if (cliff_time <= freeze.start_time) {
-                freeze_period_after_cliff = freeze_period_after_cliff + affected_period;
-            } else {
-                let freeze_period_before_cliff_ = cliff_time - freeze.start_time;
-                let (affected_period_before_cliff, affected_period_after_cliff) = if (affected_period > freeze_period_before_cliff_) {
-                    (freeze_period_before_cliff_, affected_period - freeze_period_before_cliff_)
-                } else {
-                    (affected_period, 0)
-                };
-
-                freeze_period_before_cliff = freeze_period_before_cliff + affected_period_before_cliff;
-                freeze_period_after_cliff = freeze_period_after_cliff + affected_period_after_cliff;
-            };
+            freeze_period = freeze_period + affected_period;
 
             i = i + 1;
         };
 
-        (freeze_period_before_cliff, freeze_period_after_cliff)
+        freeze_period
     }
 
     fun calc_claimable_amount(vesting: &Vesting, freezes: &vector<FreezePeriod>): u64 {
@@ -411,30 +395,28 @@ module vesting::vesting {
         let cliff_time = vesting.start_time + vesting.cliff_period;
 
         // take freeze periods into account
-        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(cur_time, cliff_time, freezes);
-        let cliff_time_after_freeze = cliff_time + freeze_period_before_cliff;
-        let claim_by_frequency_start_time = cliff_time_after_freeze + freeze_period_after_cliff;
+        let freeze_period = calc_affected_freeze_period(cur_time, freezes);
+        let cliff_time = cliff_time + freeze_period;
 
         // check if the vesting is still in the cliff period
-        if (cur_time < cliff_time_after_freeze) {
+        if (cur_time < cliff_time) {
             return 0
         };
 
         // calculate elapsed claim frequencies
-        let elapsed_claim_frequencies = if (cur_time <= claim_by_frequency_start_time) {
-            0
-        } else {
-            (cur_time - claim_by_frequency_start_time) / vesting.claim_frequency
-        };
-
+        let elapsed_claim_frequencies = (cur_time - cliff_time) / vesting.claim_frequency;
         let elapsed_period = vesting.cliff_period + elapsed_claim_frequencies * vesting.claim_frequency;
-        let claimable_amount = (
+        let vested_amount = (
             (vesting.allocation as u128) * (elapsed_period as u128) / (
                 vesting.vesting_period as u128
             ) as u64
-        ) - vesting.claimed_amount;
+        );
 
-        claimable_amount
+        if (vested_amount > vesting.claimed_amount) {
+            vested_amount - vesting.claimed_amount
+        } else {
+            0
+        }
     }
 
     #[test_only]
@@ -829,82 +811,29 @@ module vesting::vesting {
     #[test]
     fun test_calc_affected_freeze_period() {
         // 1. cur_time <= freeze.start_time
-        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(
-            100, 110,
-            &vector[
+        let freeze_period = calc_affected_freeze_period(
+            100, &vector[
                 FreezePeriod { start_time: 120, period: 10 }
             ]
         );
-        assert!(freeze_period_before_cliff == 0 && freeze_period_after_cliff == 0, 1);
+        assert!(freeze_period == 0, 1);
 
         // 2. cur_time >= freeze.end_time
 
-        // 2.1 cliff_time <= freeze.start_time
-        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(
-            120, 90,
-            &vector[
+        let freeze_period = calc_affected_freeze_period(
+            120, &vector[
                 FreezePeriod { start_time: 110, period: 10 }
             ]
         );
-        assert!(freeze_period_before_cliff == 0 && freeze_period_after_cliff == 10, 2);
-
-        // 2.2 cliff_time >= freeze.end_time
-        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(
-            120, 120,
-            &vector[
-                FreezePeriod { start_time: 110, period: 10 }
-            ]
-        );
-        assert!(freeze_period_before_cliff == 10 && freeze_period_after_cliff == 0, 3);
-
-        // 2.3 cliff_time > freeze.start_time && cliff_time < freeze.end_time
-        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(
-            120, 115,
-            &vector[
-                FreezePeriod { start_time: 110, period: 10 }
-            ]
-        );
-        assert!(freeze_period_before_cliff == 5 && freeze_period_after_cliff == 5, 4);
+        assert!(freeze_period == 10, 2);
 
         // 3. cur_time > freeze.start_time && cur_time < freeze.end_time
-
-        // 3.1 cliff_time <= freeze.start_time
-        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(
-            115, 90,
-            &vector[
+        let freeze_period = calc_affected_freeze_period(
+            115, &vector[
                 FreezePeriod { start_time: 110, period: 10 }
             ]
         );
-        assert!(freeze_period_before_cliff == 0 && freeze_period_after_cliff == 5, 5);
-
-        // 3.2 cliff_time >= freeze.end_time
-        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(
-            115, 120,
-            &vector[
-                FreezePeriod { start_time: 110, period: 10 }
-            ]
-        );
-        assert!(freeze_period_before_cliff == 5 && freeze_period_after_cliff == 0, 6);
-
-        // 3.3 cliff_time > freeze.start_time && cliff_time < freeze.end_time
-
-        // 3.3.1 cur_time < cliff_time
-        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(
-            113, 115,
-            &vector[
-                FreezePeriod { start_time: 110, period: 10 }
-            ]
-        );
-        assert!(freeze_period_before_cliff == 3 && freeze_period_after_cliff == 0, 7);
-
-        // 3.3.2 cur_time > cliff_time
-        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(
-            117, 115,
-            &vector[
-                FreezePeriod { start_time: 110, period: 10 }
-            ]
-        );
-        assert!(freeze_period_before_cliff == 5 && freeze_period_after_cliff == 2, 8);
+        assert!(freeze_period == 5, 5);
     }
 
     #[test(creator = @0x999, recipient = @0x998, mod_account = @0x1)]
