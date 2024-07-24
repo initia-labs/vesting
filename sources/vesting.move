@@ -7,6 +7,8 @@ module vesting::vesting {
     use initia_std::error;
     use initia_std::block;
     use initia_std::event;
+    use initia_std::option::{Self, Option};
+    use initia_std::vector;
 
     /// A capability that represents the ability to manage vesting schedules.
     struct AdminCapability has store {
@@ -27,6 +29,9 @@ module vesting::vesting {
 
         /// A map of vesting schedules.
         vestings: Table<address, Vesting>,
+
+        /// A list of freeze periods.
+        freezes: vector<FreezePeriod>
     }
 
     /// A struct that represents a vesting schedule.
@@ -53,6 +58,15 @@ module vesting::vesting {
         claim_frequency: u64,
     }
 
+    /// A struct that represents a freeze period.
+    struct FreezePeriod has store, copy, drop {
+        /// The time in which the freeze period starts.
+        start_time: u64,
+
+        /// The total period over which the tokens will be frozen.
+        period: u64
+    }
+
     // Events
 
     #[event]
@@ -68,6 +82,7 @@ module vesting::vesting {
     const EVESTING_NOT_FOUND: u64 = 3;
     const EVESTING_ALREADY_EXISTS: u64 = 4;
     const EVESTING_NOT_EXISTS: u64 = 5;
+    const EFREEZE_PERIOD_OVERLAP: u64 = 6;
 
     // Admin functions
 
@@ -92,6 +107,7 @@ module vesting::vesting {
                 token_metadata,
                 extend_ref,
                 vestings: table::new<address, Vesting>(),
+                freezes: vector[],
             }
         );
 
@@ -112,6 +128,34 @@ module vesting::vesting {
         store.enable = true;
     }
 
+    /// Add a freeze period.
+    public fun add_freeze_period(capability: &AdminCapability, start_time: Option<u64>, period: u64) acquires VestingStore {
+        let store = borrow_global_mut<VestingStore>(capability.creator);
+        let start_time = if (option::is_none(&start_time)) {
+            let (_, cur_time) = block::get_block_info();
+            cur_time
+        } else {
+            *option::borrow(&start_time)
+        };
+
+        // check overlapping freeze periods
+        let i = 0;
+        while (i < vector::length(&store.freezes)) {
+            let freeze = vector::borrow(&store.freezes, i);
+            let freeze_end_time = freeze.start_time + freeze.period;
+            let new_freeze_end_time = start_time + period;
+
+            assert!(
+                start_time >= freeze_end_time || new_freeze_end_time <= freeze.start_time,
+                error::invalid_argument(EFREEZE_PERIOD_OVERLAP)
+            );
+
+            i = i + 1;
+        };
+
+        vector::push_back(&mut store.freezes, FreezePeriod { start_time, period });
+    }
+
     /// Withdraw vesting funds from the store.
     public fun withdraw_vesting_funds(
         capability: &AdminCapability,
@@ -130,6 +174,7 @@ module vesting::vesting {
         capability: &AdminCapability,
         recipient: address,
         allocation: u64,
+        start_time: Option<u64>,
         vesting_period: u64,
         cliff_period: u64,
         claim_frequency: u64
@@ -140,7 +185,12 @@ module vesting::vesting {
             error::already_exists(EVESTING_ALREADY_EXISTS)
         );
 
-        let (_, cur_time) = block::get_block_info();
+        let start_time = if (option::is_some(&start_time)) {
+            *option::borrow(&start_time)
+        } else {
+            let (_, cur_time) = block::get_block_info();
+            cur_time
+        };
 
         table::add(
             &mut store.vestings,
@@ -148,7 +198,7 @@ module vesting::vesting {
             Vesting {
                 allocation,
                 claimed_amount: 0,
-                start_time: cur_time,
+                start_time,
                 vesting_period,
                 cliff_period,
                 claim_frequency,
@@ -174,10 +224,11 @@ module vesting::vesting {
     public fun update_vesting(
         capability: &AdminCapability,
         recipient: address,
-        allocation: u64,
-        vesting_period: u64,
-        cliff_period: u64,
-        claim_frequency: u64
+        allocation: Option<u64>,
+        start_time: Option<u64>,
+        vesting_period: Option<u64>,
+        cliff_period: Option<u64>,
+        claim_frequency: Option<u64>
     ) acquires VestingStore {
         let store = borrow_global_mut<VestingStore>(capability.creator);
         assert!(
@@ -186,10 +237,21 @@ module vesting::vesting {
         );
 
         let vesting = table::borrow_mut(&mut store.vestings, recipient);
-        vesting.allocation = allocation;
-        vesting.vesting_period = vesting_period;
-        vesting.cliff_period = cliff_period;
-        vesting.claim_frequency = claim_frequency;
+        if (option::is_some(&allocation)) {
+            vesting.allocation = *option::borrow(&allocation);
+        };
+        if (option::is_some(&start_time)) {
+            vesting.start_time = *option::borrow(&start_time);
+        };
+        if (option::is_some(&vesting_period)) {
+            vesting.vesting_period = *option::borrow(&vesting_period);
+        };
+        if (option::is_some(&cliff_period)) {
+            vesting.cliff_period = *option::borrow(&cliff_period);
+        };
+        if (option::is_some(&claim_frequency)) {
+            vesting.claim_frequency = *option::borrow(&claim_frequency);
+        };
     }
 
     // User functions
@@ -205,32 +267,17 @@ module vesting::vesting {
     public fun claim(account: &signer, creator: address): FungibleAsset acquires VestingStore {
         let account_addr = signer::address_of(account);
         let store = borrow_global_mut<VestingStore>(creator);
-
         assert!(
             store.enable,
             error::invalid_state(ECLAIM_NOT_ENABLED)
         );
-
         assert!(
             table::contains(&store.vestings, account_addr),
             error::invalid_state(EVESTING_NOT_FOUND)
         );
+
         let vesting = table::borrow_mut(&mut store.vestings, account_addr);
-        let (_, cur_time) = block::get_block_info();
-        let cliff_time = vesting.start_time + vesting.cliff_period;
-
-        // check if the vesting is still in the cliff period
-        if (cur_time < cliff_time) {
-            return fungible_asset::zero(store.token_metadata)
-        };
-
-        let elapsed_claim_frequencies = (cur_time - cliff_time) / vesting.claim_frequency;
-        let elapsed_period = vesting.cliff_period + elapsed_claim_frequencies * vesting.claim_frequency;
-        let claimable_amount = (
-            (vesting.allocation as u128) * (elapsed_period as u128) / (
-                vesting.vesting_period as u128
-            ) as u64
-        ) - vesting.claimed_amount;
+        let claimable_amount = calc_claimable_amount(vesting, &store.freezes);
         if (claimable_amount == 0) {
             return fungible_asset::zero(store.token_metadata)
         };
@@ -311,16 +358,75 @@ module vesting::vesting {
             error::not_found(EVESTING_NOT_EXISTS)
         );
 
-        let (_, cur_time) = block::get_block_info();
         let vesting = table::borrow(&store.vestings, recipient);
+        calc_claimable_amount(vesting, &store.freezes)
+    }
+
+    // Internal functions
+
+    fun calc_affected_freeze_period(cur_time: u64, cliff_time: u64, freezes: &vector<FreezePeriod>): (u64, u64) {
+        let freeze_period_before_cliff = 0;
+        let freeze_period_after_cliff = 0;
+
+        let i = 0;
+        while (i < vector::length(freezes)) {
+            let freeze = vector::borrow(freezes, i);
+            if (cur_time <= freeze.start_time) {
+                i = i + 1;
+
+                continue
+            };
+
+            let freeze_end_time = freeze.start_time + freeze.period;
+            let affected_period = if (cur_time >= freeze_end_time) { 
+                freeze.period
+            } else {
+                cur_time - freeze.start_time
+            };
+
+            if (cliff_time >= freeze_end_time) {
+                freeze_period_before_cliff = freeze_period_before_cliff + affected_period;
+            } else if (cliff_time <= freeze.start_time) {
+                freeze_period_after_cliff = freeze_period_after_cliff + affected_period;
+            } else {
+                let freeze_period_before_cliff_ = cliff_time - freeze.start_time;
+                let (affected_period_before_cliff, affected_period_after_cliff) = if (affected_period > freeze_period_before_cliff_) {
+                    (freeze_period_before_cliff_, affected_period - freeze_period_before_cliff_)
+                } else {
+                    (affected_period, 0)
+                };
+
+                freeze_period_before_cliff = freeze_period_before_cliff + affected_period_before_cliff;
+                freeze_period_after_cliff = freeze_period_after_cliff + affected_period_after_cliff;
+            };
+
+            i = i + 1;
+        };
+
+        (freeze_period_before_cliff, freeze_period_after_cliff)
+    }
+
+    fun calc_claimable_amount(vesting: &Vesting, freezes: &vector<FreezePeriod>): u64 {
+        let (_, cur_time) = block::get_block_info();
         let cliff_time = vesting.start_time + vesting.cliff_period;
 
+        // take freeze periods into account
+        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(cur_time, cliff_time, freezes);
+        let cliff_time_after_freeze = cliff_time + freeze_period_before_cliff;
+        let claim_by_frequency_start_time = cliff_time_after_freeze + freeze_period_after_cliff;
+
         // check if the vesting is still in the cliff period
-        if (cur_time < cliff_time) {
+        if (cur_time < cliff_time_after_freeze) {
             return 0
         };
 
-        let elapsed_claim_frequencies = (cur_time - cliff_time) / vesting.claim_frequency;
+        // calculate elapsed claim frequencies
+        let elapsed_claim_frequencies = if (cur_time <= claim_by_frequency_start_time) {
+            0
+        } else {
+            (cur_time - claim_by_frequency_start_time) / vesting.claim_frequency
+        };
+
         let elapsed_period = vesting.cliff_period + elapsed_claim_frequencies * vesting.claim_frequency;
         let claimable_amount = (
             (vesting.allocation as u128) * (elapsed_period as u128) / (
@@ -333,9 +439,6 @@ module vesting::vesting {
 
     #[test_only]
     use initia_std::managed_coin;
-
-    #[test_only]
-    use initia_std::option;
 
     #[test_only]
     use initia_std::string;
@@ -455,6 +558,7 @@ module vesting::vesting {
             &capability,
             signer::address_of(recipient),
             100, // allocation
+            option::none(), // start time
             100, // vesting period
             10, // cliff period
             10 // claim frequency
@@ -475,10 +579,11 @@ module vesting::vesting {
         update_vesting(
             &capability,
             signer::address_of(recipient),
-            200, // allocation
-            200, // vesting period
-            20, // cliff period
-            20 // claim frequency
+            option::some(200), // allocation
+            option::none(),    // start time
+            option::some(200), // vesting period
+            option::some(20),  // cliff period
+            option::some(20)   // claim frequency
         );
 
         let vesting = vesting_info(
@@ -537,6 +642,7 @@ module vesting::vesting {
             &capability,
             signer::address_of(recipient),
             100, // allocation
+            option::some(100), // start time
             100, // vesting period
             10, // cliff period
             10 // claim frequency
@@ -625,6 +731,183 @@ module vesting::vesting {
     }
 
     #[test(creator = @0x999, recipient = @0x998, mod_account = @0x1)]
+    fun vesting_with_freeze(
+        creator: &signer,
+        recipient: &signer,
+        mod_account: &signer,
+    ) acquires VestingStore {
+        let metadata = test_init(mod_account);
+        let capability = create_vesting_store(creator, metadata);
+        enable_claim(&capability);
+
+        test_mint(
+            mod_account,
+            signer::address_of(creator),
+            1000
+        );
+        let tokens = coin::withdraw(creator, metadata, 1000);
+
+        // deposit tokens
+        primary_fungible_store::deposit(
+            store_addr(signer::address_of(creator)),
+            tokens
+        );
+        assert!(
+            vesting_funds(signer::address_of(creator)) == 1000,
+            1
+        );
+
+        // set block info
+        block::set_block_info(100, 100);
+
+        // add vesting
+        add_vesting(
+            &capability,
+            signer::address_of(recipient),
+            100, // allocation
+            option::some(100), // start time
+            100, // vesting period
+            10, // cliff period
+            10 // claim frequency
+        );
+
+        // add freeze period before cliff time
+        add_freeze_period(
+            &capability,
+            option::none(),
+            10
+        );
+
+        // cliff period passed, but cliff_time is pushed due to the freeze period
+        block::set_block_info(100, 110);
+
+        let claimable_amount = claimable_amount(
+            signer::address_of(creator),
+            signer::address_of(recipient)
+        );
+        assert!(claimable_amount == 0, 3);
+
+        // freeze period passed
+        block::set_block_info(100, 120);
+
+        let claimable_amount = claimable_amount(
+            signer::address_of(creator),
+            signer::address_of(recipient)
+        );
+        assert!(claimable_amount == 10, 4);
+
+        // add freeze period after cliff time
+        add_freeze_period(
+            &capability,
+            option::some(120),
+            10
+        );
+
+        // freeze period passed but claim_by_frequency_start_time is pushed due to the freeze period
+        block::set_block_info(100, 130);
+
+        // claim
+        let tokens = claim(
+            recipient,
+            signer::address_of(creator)
+        );
+        assert!(
+            fungible_asset::amount(&tokens) == 10,
+            5
+        );
+
+        primary_fungible_store::deposit(
+            store_addr(signer::address_of(creator)),
+            tokens
+        );
+        move_to(
+            creator,
+            CapabilityStore { capability }
+        );
+    }
+
+    #[test]
+    fun test_calc_affected_freeze_period() {
+        // 1. cur_time <= freeze.start_time
+        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(
+            100, 110,
+            &vector[
+                FreezePeriod { start_time: 120, period: 10 }
+            ]
+        );
+        assert!(freeze_period_before_cliff == 0 && freeze_period_after_cliff == 0, 1);
+
+        // 2. cur_time >= freeze.end_time
+
+        // 2.1 cliff_time <= freeze.start_time
+        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(
+            120, 90,
+            &vector[
+                FreezePeriod { start_time: 110, period: 10 }
+            ]
+        );
+        assert!(freeze_period_before_cliff == 0 && freeze_period_after_cliff == 10, 2);
+
+        // 2.2 cliff_time >= freeze.end_time
+        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(
+            120, 120,
+            &vector[
+                FreezePeriod { start_time: 110, period: 10 }
+            ]
+        );
+        assert!(freeze_period_before_cliff == 10 && freeze_period_after_cliff == 0, 3);
+
+        // 2.3 cliff_time > freeze.start_time && cliff_time < freeze.end_time
+        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(
+            120, 115,
+            &vector[
+                FreezePeriod { start_time: 110, period: 10 }
+            ]
+        );
+        assert!(freeze_period_before_cliff == 5 && freeze_period_after_cliff == 5, 4);
+
+        // 3. cur_time > freeze.start_time && cur_time < freeze.end_time
+
+        // 3.1 cliff_time <= freeze.start_time
+        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(
+            115, 90,
+            &vector[
+                FreezePeriod { start_time: 110, period: 10 }
+            ]
+        );
+        assert!(freeze_period_before_cliff == 0 && freeze_period_after_cliff == 5, 5);
+
+        // 3.2 cliff_time >= freeze.end_time
+        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(
+            115, 120,
+            &vector[
+                FreezePeriod { start_time: 110, period: 10 }
+            ]
+        );
+        assert!(freeze_period_before_cliff == 5 && freeze_period_after_cliff == 0, 6);
+
+        // 3.3 cliff_time > freeze.start_time && cliff_time < freeze.end_time
+
+        // 3.3.1 cur_time < cliff_time
+        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(
+            113, 115,
+            &vector[
+                FreezePeriod { start_time: 110, period: 10 }
+            ]
+        );
+        assert!(freeze_period_before_cliff == 3 && freeze_period_after_cliff == 0, 7);
+
+        // 3.3.2 cur_time > cliff_time
+        let (freeze_period_before_cliff, freeze_period_after_cliff) = calc_affected_freeze_period(
+            117, 115,
+            &vector[
+                FreezePeriod { start_time: 110, period: 10 }
+            ]
+        );
+        assert!(freeze_period_before_cliff == 5 && freeze_period_after_cliff == 2, 8);
+    }
+
+    #[test(creator = @0x999, recipient = @0x998, mod_account = @0x1)]
     #[expected_failure(abort_code = 0x80001, location = Self)]
     fun failed_to_create_vesting_store_with_already_exists_error(
         creator: &signer,
@@ -660,6 +943,7 @@ module vesting::vesting {
             &capability,
             signer::address_of(recipient),
             100, // allocation
+            option::some(100), // start time
             100, // vesting period
             10, // cliff period
             10 // claim frequency
@@ -669,6 +953,7 @@ module vesting::vesting {
             &capability,
             signer::address_of(recipient),
             100, // allocation
+            option::none(), // start time
             100, // vesting period
             10, // cliff period
             10 // claim frequency
@@ -694,6 +979,7 @@ module vesting::vesting {
             &capability,
             signer::address_of(recipient),
             100, // allocation
+            option::none(), // start time
             100, // vesting period
             10, // cliff period
             10 // claim frequency
@@ -763,6 +1049,33 @@ module vesting::vesting {
             store_addr(signer::address_of(creator)),
             tokens
         );
+        move_to(
+            creator,
+            CapabilityStore { capability }
+        );
+    }
+
+    #[test(creator = @0x999, mod_account = @0x1)]
+    #[expected_failure(abort_code = 0x10006, location = Self)]
+    fun filaed_to_add_freeze_with_overlap_error(
+        creator: &signer,
+        mod_account: &signer
+    ) acquires VestingStore {
+        let metadata = test_init(mod_account);
+        let capability = create_vesting_store(creator, metadata);
+
+        add_freeze_period(
+            &capability,
+            option::none(),
+            10
+        );
+
+        add_freeze_period(
+            &capability,
+            option::none(),
+            5
+        );
+
         move_to(
             creator,
             CapabilityStore { capability }

@@ -8,6 +8,7 @@ module vesting::manager {
     use initia_std::fungible_asset::Metadata;
     use initia_std::primary_fungible_store;
     use initia_std::object::Object;
+    use initia_std::option::Option;
 
     use vesting::vesting::{Self, AdminCapability};
 
@@ -51,6 +52,7 @@ module vesting::manager {
         admin: &signer,
         recipient: address,
         allocation: u64,
+        start_time: Option<u64>,
         vesting_period: u64,
         cliff_period: u64,
         claim_frequency: u64,
@@ -60,6 +62,7 @@ module vesting::manager {
             &store.admin_capability,
             recipient,
             allocation,
+            start_time,
             vesting_period,
             cliff_period,
             claim_frequency
@@ -74,19 +77,30 @@ module vesting::manager {
     public entry fun update_vesting(
         admin: &signer,
         recipient: address,
-        allocation: u64,
-        vesting_period: u64,
-        cliff_period: u64,
-        claim_frequency: u64,
+        allocation: Option<u64>,
+        start_time: Option<u64>,
+        vesting_period: Option<u64>,
+        cliff_period: Option<u64>,
+        claim_frequency: Option<u64>,
     ) acquires ManagerStore {
         let store = borrow_global_mut<ManagerStore>(signer::address_of(admin));
         vesting::update_vesting(
             &store.admin_capability,
             recipient,
             allocation,
+            start_time,
             vesting_period,
             cliff_period,
             claim_frequency
         );
+    }
+
+    public entry fun add_freeze_period(
+        admin: &signer,
+        start_time: Option<u64>,
+        freeze_period: u64
+    ) acquires ManagerStore {
+        let store = borrow_global_mut<ManagerStore>(signer::address_of(admin));
+        vesting::add_freeze_period(&store.admin_capability, start_time, freeze_period);
     }
 }
