@@ -257,7 +257,7 @@ module vesting::vesting {
     // User functions
 
     /// Add vesting funds to the store.
-    public entry fun funding(
+    public entry fun fund_vesting(
         depositor: &signer, 
         creator: address,
         amount: u64
