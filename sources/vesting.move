@@ -256,6 +256,19 @@ module vesting::vesting {
 
     // User functions
 
+    /// Add vesting funds to the store.
+    public entry fun funding(
+        depositor: &signer, 
+        creator: address,
+        amount: u64
+    ) acquires VestingStore {
+        let store = borrow_global<VestingStore>(creator);
+        let token = primary_fungible_store::withdraw(depositor, store.token_metadata, amount);
+        let store_addr = object::address_from_extend_ref(&store.extend_ref);
+        primary_fungible_store::deposit(store_addr, token);
+    }
+
+    /// Claim the vested tokens and deposit to the account.
     public entry fun claim_script(account: &signer, creator: address) acquires VestingStore {
         let tokens = claim(account, creator);
 
