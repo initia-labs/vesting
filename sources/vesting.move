@@ -362,6 +362,18 @@ module vesting::vesting {
         calc_claimable_amount(vesting, &store.freezes)
     }
 
+    #[view]
+    public fun vesting_amount(creator: address, recipient: address): u64 acquires VestingStore {
+        let store = borrow_global<VestingStore>(creator);
+        assert!(
+            table::contains(&store.vestings, recipient),
+            error::not_found(EVESTING_NOT_EXISTS)
+        );
+
+        let vesting = table::borrow(&store.vestings, recipient);
+        vesting.allocation - calc_claimable_amount(vesting, &store.freezes)
+    }
+
     // Internal functions
 
     fun calc_affected_freeze_period(cur_time: u64, freezes: &vector<FreezePeriod>): u64 {
