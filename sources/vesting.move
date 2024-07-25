@@ -374,6 +374,12 @@ module vesting::vesting {
         vesting.allocation - calc_claimable_amount(vesting, &store.freezes)
     }
 
+    #[view]
+    public fun vesting_table_handle(creator: address): address acquires VestingStore {
+        let store = borrow_global<VestingStore>(creator);
+        table::handle(&store.vestings)
+    }
+
     // Internal functions
 
     fun calc_affected_freeze_period(cur_time: u64, freezes: &vector<FreezePeriod>): u64 {
