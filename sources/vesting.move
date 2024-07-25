@@ -327,6 +327,12 @@ module vesting::vesting {
     }
 
     #[view]
+    public fun vesting_token_metadata(creator: address): Object<Metadata> acquires VestingStore {
+        let store = borrow_global<VestingStore>(creator);
+        store.token_metadata
+    }
+
+    #[view]
     /// Returns the address of the vesting store. This address can be used
     /// to deposit vesting funds.
     public fun store_addr(creator: address): address acquires VestingStore {
