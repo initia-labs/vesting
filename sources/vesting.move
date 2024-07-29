@@ -83,6 +83,7 @@ module vesting::vesting {
     const EVESTING_ALREADY_EXISTS: u64 = 4;
     const EVESTING_NOT_EXISTS: u64 = 5;
     const EFREEZE_PERIOD_OVERLAP: u64 = 6;
+    const EZERO_CLAIMABLE: u64 = 7;
 
     // Admin functions
 
@@ -291,9 +292,10 @@ module vesting::vesting {
 
         let vesting = table::borrow_mut(&mut store.vestings, account_addr);
         let claimable_amount = calc_claimable_amount(vesting, &store.freezes);
-        if (claimable_amount == 0) {
-            return fungible_asset::zero(store.token_metadata)
-        };
+        assert!(
+            claimable_amount > 0,
+            error::invalid_state(EZERO_CLAIMABLE)
+        );
 
         // increase the claimed amount
         vesting.claimed_amount = vesting.claimed_amount + claimable_amount;
@@ -427,8 +429,12 @@ module vesting::vesting {
         freeze_period
     }
 
-    fun calc_claimable_amount(vesting: &Vesting, freezes: &vector<FreezePeriod>): u64 {
+    fun calc_claimable_amount(vesting: &Vesting, freezes: &vector<FreezePeriod>): u64 {  
         let (_, cur_time) = block::get_block_info();
+        if (cur_time >= vesting.start_time + vesting.vesting_period) {
+            return vesting.allocation - vesting.claimed_amount
+        };
+
         let cliff_time = vesting.start_time + vesting.cliff_period;
 
         // take freeze periods into account
@@ -441,7 +447,12 @@ module vesting::vesting {
         };
 
         // calculate elapsed claim frequencies
-        let elapsed_claim_frequencies = (cur_time - cliff_time) / vesting.claim_frequency;
+        let elapsed_claim_frequencies = if (vesting.claim_frequency > 0) {
+            (cur_time - cliff_time) / vesting.claim_frequency
+        } else {
+            0
+        };
+
         let elapsed_period = vesting.cliff_period + elapsed_claim_frequencies * vesting.claim_frequency;
         let vested_amount = (
             (vesting.allocation as u128) * (elapsed_period as u128) / (
