@@ -1,5 +1,5 @@
 module vesting::vesting {
-    use initia_std::fungible_asset::{Self, Metadata, FungibleAsset};
+    use initia_std::fungible_asset::{Metadata, FungibleAsset};
     use initia_std::primary_fungible_store;
     use initia_std::object::{Self, Object, ExtendRef};
     use initia_std::table::{Self, Table};
@@ -322,7 +322,7 @@ module vesting::vesting {
 
     // View functions
 
-    public fun lookup_vesting(vesting: &Vesting): (u64, u64, u64, u64, u64) {
+    public fun lookup_vesting(vesting: &Vesting): (u64, u64, u64, u64, u64, u64) {
         (
             vesting.allocation,
             vesting.claimed_amount,
@@ -488,6 +488,9 @@ module vesting::vesting {
     use initia_std::coin;
 
     #[test_only]
+    use initia_std::fungible_asset;
+
+    #[test_only]
     const TEST_SYMBOL: vector<u8> = b"FMD";
 
     #[test_only]
@@ -505,8 +508,6 @@ module vesting::vesting {
 
     #[test_only]
     fun test_init(mod_account: &signer): Object<Metadata> {
-        primary_fungible_store::init_module_for_test(mod_account);
-
         managed_coin::initialize(
             mod_account,
             option::none(),
@@ -519,7 +520,7 @@ module vesting::vesting {
 
         let metadata = test_metadata();
         assert!(
-            coin::is_coin_initialized(metadata),
+            coin::is_coin(object::object_address(&metadata)),
             0
         );
 
@@ -533,7 +534,7 @@ module vesting::vesting {
         amount: u64
     ) {
         let metadata = test_metadata();
-        managed_coin::mint(
+        managed_coin::mint_to(
             mod_account,
             recipient,
             metadata,
