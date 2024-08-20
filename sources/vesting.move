@@ -322,6 +322,17 @@ module vesting::vesting {
 
     // View functions
 
+    public fun lookup_vesting(vesting: &Vesting): (u64, u64, u64, u64, u64) {
+        (
+            vesting.allocation,
+            vesting.claimed_amount,
+            vesting.start_time,
+            vesting.vesting_period,
+            vesting.cliff_period,
+            vesting.claim_frequency
+        )
+    }
+
     #[view]
     public fun claim_enabled(creator: address): bool acquires VestingStore {
         let store = borrow_global<VestingStore>(creator);
