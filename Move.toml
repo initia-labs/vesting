@@ -7,4 +7,7 @@ InitiaStdlib = { git = "https://github.com/initia-labs/movevm.git", subdir = "pr
 
 [addresses]
 std = "0x1"
+vesting = "_"
+
+[dev-addresses]
 vesting = "0x2"
