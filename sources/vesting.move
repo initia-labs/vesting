@@ -494,7 +494,7 @@ module vesting::vesting {
     const TEST_SYMBOL: vector<u8> = b"FMD";
 
     #[test_only]
-    fun test_metadata(): Object<Metadata> {
+    public fun test_metadata(): Object<Metadata> {
         coin::metadata(
             @initia_std,
             string::utf8(TEST_SYMBOL)
@@ -507,7 +507,7 @@ module vesting::vesting {
     }
 
     #[test_only]
-    fun test_init(mod_account: &signer): Object<Metadata> {
+    public fun test_init(mod_account: &signer): Object<Metadata> {
         managed_coin::initialize(
             mod_account,
             option::none(),
@@ -528,7 +528,7 @@ module vesting::vesting {
     }
 
     #[test_only]
-    fun test_mint(
+    public fun test_mint(
         mod_account: &signer,
         recipient: address,
         amount: u64
