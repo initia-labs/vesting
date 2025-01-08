@@ -9,6 +9,7 @@ module vesting::manager {
     use initia_std::primary_fungible_store;
     use initia_std::object::Object;
     use initia_std::option::Option;
+    use initia_std::error;
 
     use vesting::vesting::{Self, AdminCapability};
 
@@ -17,23 +18,33 @@ module vesting::manager {
         admin_capability: AdminCapability,
     }
 
+    // Error codes
+
+    const EFAILED_TO_CREATE_VESTING_STORE: u64 = 1;
+    const ECAPABILITY_NOT_FOUND: u64 = 2;
+
     // Entry functions
 
     public entry fun create_manager(
         creator: &signer,
         token_metadata: Object<Metadata>
     ) {
-        let admin_capability = vesting::create_vesting_store(creator, token_metadata);
+        assert!(!exists<ManagerStore>(signer::address_of(creator)), error::already_exists(EFAILED_TO_CREATE_VESTING_STORE));
 
+        let admin_capability = vesting::create_vesting_store(creator, token_metadata);
         move_to(creator, ManagerStore {admin_capability});
     }
 
     public entry fun enable_claim(admin: &signer) acquires ManagerStore {
+        assert!(exists<ManagerStore>(signer::address_of(admin)), error::not_found(ECAPABILITY_NOT_FOUND));
+
         let store = borrow_global_mut<ManagerStore>(signer::address_of(admin));
         vesting::enable_claim(&store.admin_capability);
     }
 
     public entry fun disable_claim(admin: &signer) acquires ManagerStore {
+        assert!(exists<ManagerStore>(signer::address_of(admin)), error::not_found(ECAPABILITY_NOT_FOUND));
+
         let store = borrow_global_mut<ManagerStore>(signer::address_of(admin));
         vesting::disable_claim(&store.admin_capability);
     }
@@ -43,6 +54,8 @@ module vesting::manager {
         recipient: address,
         amount: u64
     ) acquires ManagerStore {
+        assert!(exists<ManagerStore>(signer::address_of(admin)), error::not_found(ECAPABILITY_NOT_FOUND));
+
         let store = borrow_global_mut<ManagerStore>(signer::address_of(admin));
         let tokens = vesting::withdraw_vesting_funds(&store.admin_capability, amount);
         primary_fungible_store::deposit(recipient, tokens);
@@ -57,6 +70,8 @@ module vesting::manager {
         cliff_period: u64,
         claim_frequency: u64,
     ) acquires ManagerStore {
+        assert!(exists<ManagerStore>(signer::address_of(admin)), error::not_found(ECAPABILITY_NOT_FOUND));
+
         let store = borrow_global_mut<ManagerStore>(signer::address_of(admin));
         vesting::add_vesting(
             &store.admin_capability,
@@ -70,6 +85,8 @@ module vesting::manager {
     }
 
     public entry fun remove_vesting(admin: &signer, recipient: address) acquires ManagerStore {
+        assert!(exists<ManagerStore>(signer::address_of(admin)), error::not_found(ECAPABILITY_NOT_FOUND));
+
         let store = borrow_global_mut<ManagerStore>(signer::address_of(admin));
         vesting::remove_vesting(&store.admin_capability, recipient);
     }
@@ -83,6 +100,8 @@ module vesting::manager {
         cliff_period: Option<u64>,
         claim_frequency: Option<u64>,
     ) acquires ManagerStore {
+        assert!(exists<ManagerStore>(signer::address_of(admin)), error::not_found(ECAPABILITY_NOT_FOUND));
+
         let store = borrow_global_mut<ManagerStore>(signer::address_of(admin));
         vesting::update_vesting(
             &store.admin_capability,
@@ -100,6 +119,8 @@ module vesting::manager {
         start_time: Option<u64>,
         freeze_period: u64
     ) acquires ManagerStore {
+        assert!(exists<ManagerStore>(signer::address_of(admin)), error::not_found(ECAPABILITY_NOT_FOUND));
+
         let store = borrow_global_mut<ManagerStore>(signer::address_of(admin));
         vesting::add_freeze_period(&store.admin_capability, start_time, freeze_period);
     }
